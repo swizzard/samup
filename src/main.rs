@@ -1,4 +1,4 @@
-use samup::El;
+use samup::*;
 fn main() {
     println!("Hello, world!");
 }
