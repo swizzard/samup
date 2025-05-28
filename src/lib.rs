@@ -9,6 +9,7 @@ pub fn transcribe<O: Write>(input: &[u8], output: &mut O) -> Result<(), SamupErr
     while transcriber.ix < input.len() {
         transcriber.transcribe(input, output)?;
     }
+    transcriber.finish(output)?;
     Ok(())
 }
 
@@ -23,16 +24,16 @@ pub enum SamupError {
     #[error("syntax error")]
     Syntax,
 }
-
-impl SamupError {
-    fn stack(expected: Tag, got: Option<Tag>) -> Self {
-        if let Some(got) = got {
-            Self::BadStack { expected, got }
-        } else {
-            Self::ShortStack { expected }
-        }
-    }
-}
+//
+// impl SamupError {
+//     fn stack(expected: Tag, got: Option<Tag>) -> Self {
+//         if let Some(got) = got {
+//             Self::BadStack { expected, got }
+//         } else {
+//             Self::ShortStack { expected }
+//         }
+//     }
+// }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum C {
@@ -85,6 +86,24 @@ impl From<u8> for C {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FootNoteIx(u8);
+
+impl FootNoteIx {
+    fn push_digit(&mut self, c: u8) {
+        let c: u8 = char::from(c)
+            .to_digit(10)
+            .expect("not a digit")
+            .try_into()
+            .expect("bad digit");
+        self.0 *= 10;
+        self.0 += c;
+    }
+    fn ix(&self) -> u8 {
+        self.0
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Tag {
     H1,
@@ -94,9 +113,9 @@ pub enum Tag {
     Strong,
     Link(String),
     // ...[^1]
-    FootNoteLink(u8),
+    FootNoteLink(FootNoteIx),
     // [^1]: ...
-    FootNoteRef(u8),
+    FootNoteRef(FootNoteIx),
 }
 
 impl std::fmt::Display for Tag {
@@ -108,8 +127,14 @@ impl std::fmt::Display for Tag {
             Tag::P => f.write_str("<p>"),
             Tag::Strong => f.write_str("<strong>"),
             Tag::Link(url) => f.write_fmt(format_args!("<link: {url}>")),
-            Tag::FootNoteLink(n) => f.write_fmt(format_args!("<footnote link {n}>")),
-            Tag::FootNoteRef(n) => f.write_fmt(format_args!("<footnote ref {n}>")),
+            Tag::FootNoteLink(n) => {
+                let ix = n.ix();
+                f.write_fmt(format_args!("<footnote link {ix}>"))
+            }
+            Tag::FootNoteRef(n) => {
+                let ix = n.ix();
+                f.write_fmt(format_args!("<footnote ref {ix}>"))
+            }
         }
     }
 }
@@ -123,14 +148,20 @@ impl Tag {
             Tag::P => output.write_all(b"<p>"),
             Tag::Strong => output.write_all(b"<strong>"),
             Tag::Link(url) => write!(output, "<a href=\"{url}\" target=\"_blank\">"),
-            Tag::FootNoteLink(note_no) => write!(
-                output,
-                "<a id=\"link-{note_no}\" target=\"#ref-{note_no}\"><sup>{note_no}</sup></a>"
-            ),
-            Tag::FootNoteRef(note_no) => write!(
-                output,
-                "<p class=\"footnote\" id=\"ref-{note_no}\"><span class=\"footnote\">{note_no}:</span> "
-            ),
+            Tag::FootNoteLink(note_no) => {
+                let note_no = note_no.ix();
+                write!(
+                    output,
+                    "<a id=\"link-{note_no}\" target=\"#ref-{note_no}\"><sup>{note_no}</sup></a>"
+                )
+            }
+            Tag::FootNoteRef(note_no) => {
+                let note_no = note_no.ix();
+                write!(
+                    output,
+                    "<p class=\"footnote\" id=\"ref-{note_no}\"><span class=\"footnote\">{note_no}:</span> "
+                )
+            }
         }
     }
     fn write_close<O: Write>(&self, output: &mut O) -> Result<(), io::Error> {
@@ -143,6 +174,7 @@ impl Tag {
             Tag::Link(_) => write!(output, "</a>"),
             Tag::FootNoteLink(_) => Ok(()),
             Tag::FootNoteRef(note_no) => {
+                let note_no = note_no.ix();
                 write!(output, "<a href=\"#link-{note_no}\">\u{1f519}</a></p>")
             }
         }
@@ -153,5 +185,15 @@ impl Tag {
         } else {
             panic!()
         }
+    }
+    fn push_link(&mut self, s: &str) {
+        if let Tag::Link(u) = self {
+            u.push_str(s);
+        } else {
+            panic!()
+        }
+    }
+    fn link_url(&self) -> &str {
+        if let Tag::Link(u) = self { u } else { panic!() }
     }
 }
