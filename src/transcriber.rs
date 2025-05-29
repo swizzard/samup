@@ -1,4 +1,4 @@
-use crate::{C, SamupError, Tag};
+use crate::{C, SamupResult, Tag};
 use std::collections::VecDeque;
 use std::io::Write;
 
@@ -17,7 +17,7 @@ impl Transcriber {
             tag_stack: VecDeque::new(),
         }
     }
-    pub fn transcribe<O: Write>(&mut self, input: &[u8], output: &mut O) -> Result<(), SamupError> {
+    pub fn transcribe<O: Write>(&mut self, input: &[u8], output: &mut O) -> SamupResult {
         let curr_char = input[self.ix];
         let curr_c: C = curr_char.into();
         let next_c = match curr_c {
@@ -31,22 +31,119 @@ impl Transcriber {
             C::SqBracketR => self.transcribe_sq_bracket_r(output)?,
             C::ParenL | C::ParenR => self.transcribe_paren(output)?,
             C::Digit => self.transcribe_digit(curr_char, output)?,
-            C::Content => {
-                output.write_all(&[curr_char])?;
-                None
-            }
+            C::Content => self.transcribe_content(curr_char, output)?,
         };
         self.prev_c = next_c.unwrap_or(curr_c);
         self.ix += 1;
         Ok(())
     }
-    pub fn finish<O: Write>(&mut self, output: &mut O) -> Result<(), SamupError> {
+    pub fn finish<O: Write>(&mut self, output: &mut O) -> SamupResult {
         match self.prev_c {
-            _ => todo!(),
+            C::Whitespace | C::Newline | C::Content => (),
+            C::Underscore => match self.pop_tag() {
+                Some(tag @ Tag::I) => tag.write_close(output)?,
+                Some(tag) => {
+                    output.write_all(b"_")?;
+                    self.push_tag(tag);
+                }
+                None => {
+                    output.write_all(b"_")?;
+                }
+            },
+            C::Asterisk => match self.pop_tag() {
+                Some(tag @ Tag::Strong) => tag.write_close(output)?,
+                Some(tag) => {
+                    output.write_all(b"*")?;
+                    self.push_tag(tag);
+                }
+                None => {
+                    output.write_all(b"*")?;
+                }
+            },
+            C::Caret => {
+                output.write_all(b"[^")?;
+            }
+            C::Colon => match self.pop_tag() {
+                Some(Tag::FootNoteRef(n)) => {
+                    let n = n.ix();
+                    output.write_fmt(format_args!("[^{n}]:"))?;
+                }
+                Some(tag) => {
+                    output.write_all(b":")?;
+                    self.push_tag(tag);
+                }
+                None => {
+                    output.write_all(b":")?;
+                }
+            },
+            C::SqBracketL => {
+                output.write_all(b"[")?;
+            }
+            C::SqBracketR => match self.pop_tag() {
+                Some(tag @ Tag::Link(_)) => {
+                    tag.write_link_no_title(output)?;
+                }
+                Some(Tag::FootNoteLink(n)) | Some(Tag::FootNoteRef(n)) => {
+                    let n = n.ix();
+                    output.write_fmt(format_args!("[^{n}]"))?;
+                }
+                Some(tag) => {
+                    output.write_all(b"]")?;
+                    self.push_tag(tag);
+                }
+                None => {
+                    output.write_all(b"]")?;
+                }
+            },
+            C::ParenL => match self.pop_tag() {
+                Some(tag @ Tag::Link(_)) => {
+                    tag.write_link_no_title(output)?;
+                    output.write_all(b"(")?;
+                }
+                Some(tag) => {
+                    output.write_all(b"(")?;
+                    self.push_tag(tag);
+                }
+                None => {
+                    output.write_all(b"(")?;
+                }
+            },
+            C::ParenR => match self.pop_tag() {
+                Some(tag @ Tag::Link(_)) => {
+                    tag.write_close(output)?;
+                }
+                Some(tag) => {
+                    output.write_all(b")")?;
+                    self.push_tag(tag);
+                }
+                None => {
+                    output.write_all(b")")?;
+                }
+            },
+            C::Digit => match self.pop_tag() {
+                Some(Tag::FootNoteLink(n)) | Some(Tag::FootNoteRef(n)) => {
+                    let n = n.ix();
+                    output.write_fmt(format_args!("[^{n}"))?;
+                }
+                Some(tag) => {
+                    // unreachable
+                    self.push_tag(tag);
+                }
+                None => (),
+            },
         };
-        while let Some(tag) = self.tag_stack.pop_front() {
+        while let Some(tag) = self.pop_tag() {
             match tag {
-                _ => todo!(),
+                Tag::H1 | Tag::H2 | Tag::I | Tag::P | Tag::Strong | Tag::FootNoteRef(_) => {
+                    tag.write_close(output)?;
+                }
+                Tag::Link(u) => {
+                    output.write_fmt(format_args!("[{u}"))?;
+                }
+                Tag::FootNoteLink(n) => {
+                    let n = n.ix();
+                    output.write_fmt(format_args!("[^{n}]"))?;
+                }
             }
         }
         Ok(())
@@ -55,66 +152,61 @@ impl Transcriber {
         &mut self,
         curr_char: u8,
         output: &mut O,
-    ) -> Result<Option<C>, SamupError> {
+    ) -> SamupResult<Option<C>> {
         match self.prev_c {
-            // `  ` | `\n ` | `C `
-            C::Whitespace | C::Newline | C::Content => {
+            C::Whitespace | C::Content => {
                 output.write_all(&[curr_char])?;
             }
-            // `_ `
-            C::Underscore => match self.tag_stack.pop_front() {
+            C::Newline => {
+                output.write_fmt(format_args!("\n{curr_char}"))?;
+            }
+            C::Underscore => match self.pop_tag() {
                 Some(Tag::I) => {
                     Tag::I.write_close(output)?;
                     output.write_all(&[curr_char])?;
                 }
                 Some(other) => {
                     output.write_fmt(format_args!("_{curr_char}"))?;
-                    self.tag_stack.push_front(other);
+                    self.push_tag(other);
                 }
                 None => {
                     output.write_fmt(format_args!("_{curr_char}"))?;
                 }
             },
-            // `* `
-            C::Asterisk => match self.tag_stack.pop_front() {
+            C::Asterisk => match self.pop_tag() {
                 Some(Tag::Strong) => {
                     Tag::Strong.write_close(output)?;
                     output.write_all(&[curr_char])?;
                 }
                 Some(other) => {
                     output.write_fmt(format_args!("*{curr_char}"))?;
-                    self.tag_stack.push_front(other);
+                    self.push_tag(other);
                 }
                 None => {
                     output.write_fmt(format_args!("*{curr_char}"))?;
                 }
             },
-            // `[^ `
             C::Caret => {
                 output.write_fmt(format_args!("[^{curr_char}"))?;
             }
-            // `\d]: `
-            C::Colon => match self.tag_stack.pop_front() {
+            C::Colon => match self.pop_tag() {
                 Some(tag @ Tag::FootNoteRef(_)) => {
                     tag.write_open(output)?;
-                    self.tag_stack.push_front(tag);
+                    self.push_tag(tag);
                     output.write_all(&[curr_char])?;
                 }
                 Some(other) => {
                     output.write_fmt(format_args!(":{curr_char}"))?;
-                    self.tag_stack.push_front(other);
+                    self.push_tag(other);
                 }
                 None => {
                     output.write_fmt(format_args!(":{curr_char}"))?;
                 }
             },
-            // `[ `
             C::SqBracketL => output.write_fmt(format_args!("[{curr_char}"))?,
-            // `] `
-            C::SqBracketR => match self.tag_stack.pop_front() {
-                Some(Tag::Link(u)) => {
-                    output.write_all(u.as_bytes())?;
-                    Tag::Link(u).write_close(output)?;
+            C::SqBracketR => match self.pop_tag() {
+                Some(tag @ Tag::Link(_)) => {
+                    tag.write_link_no_title(output)?;
                     output.write_all(&[curr_char])?;
                 }
                 Some(tag @ Tag::FootNoteRef(_)) => {
@@ -127,41 +219,41 @@ impl Transcriber {
                 }
                 Some(other) => {
                     output.write_fmt(format_args!("]{curr_char}"))?;
-                    self.tag_stack.push_front(other);
+                    self.push_tag(other);
                 }
                 None => output.write_fmt(format_args!("]{curr_char}"))?,
             },
-            C::ParenL => match self.tag_stack.pop_front() {
+            C::ParenL => match self.pop_tag() {
                 Some(Tag::Link(ref url)) => {
                     output.write_fmt(format_args!("[{url}]("))?;
                 }
                 Some(tag) => {
                     output.write_all(b"(")?;
-                    self.tag_stack.push_front(tag);
+                    self.push_tag(tag);
                 }
                 None => {
                     output.write_all(b"(")?;
                 }
             },
-            C::ParenR => match self.tag_stack.pop_front() {
+            C::ParenR => match self.pop_tag() {
                 Some(tag @ Tag::Link(_)) => {
                     tag.write_close(output)?;
                     output.write_all(&[curr_char])?;
                 }
                 Some(other) => {
                     output.write_all(&[curr_char])?;
-                    self.tag_stack.push_front(other);
+                    self.push_tag(other);
                 }
                 None => output.write_all(&[curr_char])?,
             },
-            // `\d `
-            C::Digit => match self.tag_stack.pop_front() {
-                Some(Tag::FootNoteLink(_)) | Some(Tag::FootNoteRef(_)) => {
-                    return Err(SamupError::Syntax);
+            C::Digit => match self.pop_tag() {
+                Some(Tag::FootNoteLink(n)) | Some(Tag::FootNoteRef(n)) => {
+                    let n = n.ix();
+                    output.write_fmt(format_args!("[^{n}{curr_char}"))?;
                 }
                 Some(t) => {
                     output.write_all(&[curr_char])?;
-                    self.tag_stack.push_front(t);
+                    self.push_tag(t);
                 }
                 None => output.write_all(&[curr_char])?,
             },
@@ -172,54 +264,58 @@ impl Transcriber {
         &mut self,
         curr_char: u8,
         output: &mut O,
-    ) -> Result<Option<C>, SamupError> {
+    ) -> SamupResult<Option<C>> {
         match self.prev_c {
             C::Whitespace | C::Content => output.write_all(&[curr_char])?,
-            C::Newline => match self.tag_stack.pop_front() {
+            C::Newline => match self.pop_tag() {
                 Some(tag @ Tag::P) => tag.write_close(output)?,
                 Some(other) => {
                     output.write_all(&[curr_char])?;
-                    self.tag_stack.push_front(other);
+                    self.push_tag(other);
                 }
                 None => output.write_all(&[curr_char])?,
             },
-            C::Digit => match self.tag_stack.pop_front() {
-                Some(Tag::FootNoteLink(_)) | Some(Tag::FootNoteRef(_)) => {
-                    return Err(SamupError::Syntax);
+            C::Digit => match self.pop_tag() {
+                Some(Tag::FootNoteLink(n)) | Some(Tag::FootNoteRef(n)) => {
+                    let n = n.ix();
+                    output.write_fmt(format_args!("[^{n}{curr_char}"))?;
                 }
                 Some(t) => {
                     output.write_all(&[curr_char])?;
-                    self.tag_stack.push_front(t);
+                    self.push_tag(t);
                 }
                 None => output.write_all(&[curr_char])?,
             },
-            C::Colon => match self.tag_stack.pop_front() {
-                Some(Tag::FootNoteRef(_)) => return Err(SamupError::Syntax),
+            C::Colon => match self.pop_tag() {
+                Some(Tag::FootNoteRef(n)) => {
+                    let n = n.ix();
+                    output.write_fmt(format_args!("[^{n}]:{curr_char}"))?;
+                }
                 Some(t) => {
                     output.write_all(&[curr_char])?;
-                    self.tag_stack.push_front(t);
+                    self.push_tag(t);
                 }
                 None => output.write_all(&[curr_char])?,
             },
-            C::Underscore => match self.tag_stack.pop_front() {
+            C::Underscore => match self.pop_tag() {
                 Some(Tag::I) => {
                     Tag::I.write_close(output)?;
                     output.write_all(&[curr_char])?;
                 }
                 Some(other) => {
                     output.write_fmt(format_args!("_{curr_char}"))?;
-                    self.tag_stack.push_front(other)
+                    self.push_tag(other)
                 }
                 None => output.write_fmt(format_args!("_{curr_char}"))?,
             },
-            C::Asterisk => match self.tag_stack.pop_front() {
+            C::Asterisk => match self.pop_tag() {
                 Some(Tag::I) => {
                     Tag::I.write_close(output)?;
                     output.write_all(&[curr_char])?;
                 }
                 Some(other) => {
                     output.write_fmt(format_args!("*{curr_char}"))?;
-                    self.tag_stack.push_front(other)
+                    self.push_tag(other)
                 }
                 None => output.write_fmt(format_args!("*{curr_char}"))?,
             },
@@ -227,10 +323,9 @@ impl Transcriber {
                 output.write_fmt(format_args!("[^{curr_char}"))?;
             }
             C::SqBracketL => output.write_fmt(format_args!("[{curr_char}"))?,
-            C::SqBracketR => match self.tag_stack.pop_front() {
-                Some(Tag::Link(u)) => {
-                    output.write_all(u.as_bytes())?;
-                    Tag::Link(u).write_close(output)?;
+            C::SqBracketR => match self.pop_tag() {
+                Some(tag @ Tag::Link(_)) => {
+                    tag.write_link_no_title(output)?;
                     output.write_all(&[curr_char])?;
                 }
                 Some(tag @ Tag::FootNoteRef(_)) => {
@@ -244,93 +339,95 @@ impl Transcriber {
                 }
                 Some(other) => {
                     output.write_fmt(format_args!("]{curr_char}"))?;
-                    self.tag_stack.push_front(other);
+                    self.push_tag(other);
                 }
                 None => output.write_fmt(format_args!("]{curr_char}"))?,
             },
-            C::ParenL => match self.tag_stack.pop_front() {
+            C::ParenL => match self.pop_tag() {
                 Some(Tag::Link(ref url)) => {
                     output.write_fmt(format_args!("[{url}]("))?;
                 }
                 Some(tag) => {
                     output.write_all(b"(")?;
-                    self.tag_stack.push_front(tag);
+                    self.push_tag(tag);
                 }
                 None => {
                     output.write_all(b"(")?;
                 }
             },
-            C::ParenR => match self.tag_stack.pop_front() {
+            C::ParenR => match self.pop_tag() {
                 Some(tag @ Tag::Link(_)) => {
                     tag.write_close(output)?;
                     output.write_all(&[curr_char])?;
                 }
                 Some(other) => {
                     output.write_all(&[curr_char])?;
-                    self.tag_stack.push_front(other);
+                    self.push_tag(other);
                 }
                 None => output.write_all(&[curr_char])?,
             },
         }
         Ok(None)
     }
-    fn transcribe_underscore<O: Write>(&mut self, output: &mut O) -> Result<Option<C>, SamupError> {
+    fn transcribe_underscore<O: Write>(&mut self, output: &mut O) -> SamupResult<Option<C>> {
         match self.prev_c {
             C::Whitespace => {
                 Tag::I.write_open(output)?;
-                self.tag_stack.push_front(Tag::I);
+                self.push_tag(Tag::I);
             }
-            C::Newline => match self.tag_stack.pop_front() {
+            C::Newline => match self.pop_tag() {
                 Some(tag) => {
+                    output.write_all(b"\n")?;
                     Tag::I.write_open(output)?;
-                    self.tag_stack.push_front(tag);
-                    self.tag_stack.push_front(Tag::I);
+                    self.push_tag(tag);
+                    self.push_tag(Tag::I);
                 }
                 None => {
+                    output.write_all(b"\n")?;
                     Tag::P.write_open(output)?;
                     Tag::I.write_open(output)?;
-                    self.tag_stack.push_front(Tag::P);
-                    self.tag_stack.push_front(Tag::I);
+                    self.push_tag(Tag::P);
+                    self.push_tag(Tag::I);
                 }
             },
             C::Caret => output.write_fmt(format_args!("[^"))?,
-            C::Colon => match self.tag_stack.pop_front() {
+            C::Colon => match self.pop_tag() {
                 Some(tag @ Tag::FootNoteRef(_)) => {
                     tag.write_open(output)?;
                     Tag::I.write_open(output)?;
-                    self.tag_stack.push_front(tag);
-                    self.tag_stack.push_front(Tag::I)
+                    self.push_tag(tag);
+                    self.push_tag(Tag::I)
                 }
                 Some(tag) => {
                     output.write_all(b":")?;
                     Tag::I.write_open(output)?;
-                    self.tag_stack.push_front(tag);
-                    self.tag_stack.push_front(Tag::I)
+                    self.push_tag(tag);
+                    self.push_tag(Tag::I)
                 }
                 None => {
                     output.write_all(b":")?;
                     Tag::P.write_open(output)?;
                     Tag::I.write_open(output)?;
-                    self.tag_stack.push_front(Tag::P);
-                    self.tag_stack.push_front(Tag::I);
+                    self.push_tag(Tag::P);
+                    self.push_tag(Tag::I);
                 }
             },
             C::SqBracketL => {
-                if self.tag_stack.front().is_none() {
+                if self.stack_empty() {
                     Tag::P.write_open(output)?;
-                    self.tag_stack.push_front(Tag::P);
+                    self.push_tag(Tag::P);
                 };
                 output.write_all(b"[")?;
                 Tag::I.write_open(output)?;
-                self.tag_stack.push_front(Tag::I);
+                self.push_tag(Tag::I);
             }
             // __ -> _
             C::Underscore | C::Content => (),
             C::Asterisk => {
                 Tag::Strong.write_open(output)?;
-                self.tag_stack.push_front(Tag::Strong);
+                self.push_tag(Tag::Strong);
             }
-            C::SqBracketR => match self.tag_stack.pop_front() {
+            C::SqBracketR => match self.pop_tag() {
                 Some(tag @ Tag::Link(_)) => {
                     tag.write_link_no_title(output)?;
                 }
@@ -339,102 +436,104 @@ impl Transcriber {
                 }
                 Some(tag) => {
                     output.write_all(b"]")?;
-                    self.tag_stack.push_front(tag);
+                    self.push_tag(tag);
                 }
                 None => output.write_all(b"]")?,
             },
-            C::ParenL => match self.tag_stack.pop_front() {
+            C::ParenL => match self.pop_tag() {
                 Some(Tag::Link(ref url)) => {
                     output.write_fmt(format_args!("[{url}]("))?;
                 }
                 Some(tag) => {
                     output.write_all(b"(")?;
-                    self.tag_stack.push_front(tag);
+                    self.push_tag(tag);
                 }
                 None => {
                     output.write_all(b"(")?;
                 }
             },
-            C::ParenR => match self.tag_stack.pop_front() {
+            C::ParenR => match self.pop_tag() {
                 Some(tag @ Tag::Link(_)) => tag.write_close(output)?,
                 Some(tag) => {
                     output.write_all(b")")?;
-                    self.tag_stack.push_front(tag);
+                    self.push_tag(tag);
                 }
                 None => {
                     output.write_all(b")")?;
                 }
             },
-            C::Digit => match self.tag_stack.pop_front() {
+            C::Digit => match self.pop_tag() {
                 Some(Tag::FootNoteRef(n)) => {
                     let n = n.ix();
                     output.write_fmt(format_args!("[^{n}]"))?;
                 }
                 Some(tag) => {
-                    self.tag_stack.push_front(tag);
+                    self.push_tag(tag);
                 }
                 None => (),
             },
         };
         Ok(None)
     }
-    fn transcribe_asterisk<O: Write>(&mut self, output: &mut O) -> Result<Option<C>, SamupError> {
+    fn transcribe_asterisk<O: Write>(&mut self, output: &mut O) -> SamupResult<Option<C>> {
         match self.prev_c {
             C::Whitespace => {
                 Tag::Strong.write_open(output)?;
-                self.tag_stack.push_front(Tag::Strong);
+                self.push_tag(Tag::Strong);
             }
-            C::Newline => match self.tag_stack.pop_front() {
+            C::Newline => match self.pop_tag() {
                 Some(tag) => {
+                    output.write_all(b"\n")?;
                     Tag::Strong.write_open(output)?;
-                    self.tag_stack.push_front(tag);
-                    self.tag_stack.push_front(Tag::Strong);
+                    self.push_tag(tag);
+                    self.push_tag(Tag::Strong);
                 }
                 None => {
+                    output.write_all(b"\n")?;
                     Tag::P.write_open(output)?;
                     Tag::Strong.write_open(output)?;
-                    self.tag_stack.push_front(Tag::P);
-                    self.tag_stack.push_front(Tag::Strong);
+                    self.push_tag(Tag::P);
+                    self.push_tag(Tag::Strong);
                 }
             },
             C::Caret => output.write_fmt(format_args!("[^"))?,
-            C::Colon => match self.tag_stack.pop_front() {
+            C::Colon => match self.pop_tag() {
                 Some(tag @ Tag::FootNoteRef(_)) => {
                     tag.write_open(output)?;
                     Tag::Strong.write_open(output)?;
-                    self.tag_stack.push_front(tag);
-                    self.tag_stack.push_front(Tag::Strong)
+                    self.push_tag(tag);
+                    self.push_tag(Tag::Strong)
                 }
                 Some(tag) => {
                     output.write_all(b":")?;
                     Tag::Strong.write_open(output)?;
-                    self.tag_stack.push_front(tag);
-                    self.tag_stack.push_front(Tag::Strong)
+                    self.push_tag(tag);
+                    self.push_tag(Tag::Strong)
                 }
                 None => {
                     output.write_all(b":")?;
                     Tag::P.write_open(output)?;
                     Tag::Strong.write_open(output)?;
-                    self.tag_stack.push_front(Tag::P);
-                    self.tag_stack.push_front(Tag::Strong);
+                    self.push_tag(Tag::P);
+                    self.push_tag(Tag::Strong);
                 }
             },
             C::SqBracketL => {
-                if self.tag_stack.front().is_none() {
+                if self.stack_empty() {
                     Tag::P.write_open(output)?;
-                    self.tag_stack.push_front(Tag::P);
+                    self.push_tag(Tag::P);
                 };
                 output.write_all(b"[")?;
                 Tag::Strong.write_open(output)?;
-                self.tag_stack.push_front(Tag::Strong);
+                self.push_tag(Tag::Strong);
             }
             // ** -> *
             C::Asterisk | C::Content => (),
             C::Underscore => {
                 Tag::I.write_open(output)?;
-                self.tag_stack.push_front(Tag::I);
+                self.push_tag(Tag::I);
             }
-            C::SqBracketR => match self.tag_stack.pop_front() {
+            C::SqBracketR => match self.pop_tag() {
                 Some(tag @ Tag::Link(_)) => {
                     tag.write_link_no_title(output)?;
                 }
@@ -443,46 +542,46 @@ impl Transcriber {
                 }
                 Some(tag) => {
                     output.write_all(b"]")?;
-                    self.tag_stack.push_front(tag);
+                    self.push_tag(tag);
                 }
                 None => output.write_all(b"]")?,
             },
-            C::ParenL => match self.tag_stack.pop_front() {
+            C::ParenL => match self.pop_tag() {
                 Some(Tag::Link(ref url)) => {
                     output.write_fmt(format_args!("[{url}]("))?;
                 }
                 Some(tag) => {
                     output.write_all(b"(")?;
-                    self.tag_stack.push_front(tag);
+                    self.push_tag(tag);
                 }
                 None => {
                     output.write_all(b"(")?;
                 }
             },
-            C::ParenR => match self.tag_stack.pop_front() {
+            C::ParenR => match self.pop_tag() {
                 Some(tag @ Tag::Link(_)) => tag.write_close(output)?,
                 Some(tag) => {
                     output.write_all(b")")?;
-                    self.tag_stack.push_front(tag);
+                    self.push_tag(tag);
                 }
                 None => {
                     output.write_all(b")")?;
                 }
             },
-            C::Digit => match self.tag_stack.pop_front() {
+            C::Digit => match self.pop_tag() {
                 Some(Tag::FootNoteRef(n)) => {
                     let n = n.ix();
                     output.write_fmt(format_args!("[^{n}]"))?;
                 }
                 Some(tag) => {
-                    self.tag_stack.push_front(tag);
+                    self.push_tag(tag);
                 }
                 None => (),
             },
         };
         Ok(None)
     }
-    fn transcribe_caret<O: Write>(&mut self, output: &mut O) -> Result<Option<C>, SamupError> {
+    fn transcribe_caret<O: Write>(&mut self, output: &mut O) -> SamupResult<Option<C>> {
         let mut next_c = None;
         match self.prev_c {
             C::SqBracketL => (),
@@ -493,7 +592,7 @@ impl Transcriber {
         };
         Ok(next_c)
     }
-    fn transcribe_colon<O: Write>(&mut self, output: &mut O) -> Result<Option<C>, SamupError> {
+    fn transcribe_colon<O: Write>(&mut self, output: &mut O) -> SamupResult<Option<C>> {
         let mut next_c = None;
         match self.prev_c {
             C::SqBracketR => (),
@@ -504,87 +603,84 @@ impl Transcriber {
         };
         Ok(next_c)
     }
-    fn transcribe_sq_bracket_l<O: Write>(
-        &mut self,
-        output: &mut O,
-    ) -> Result<Option<C>, SamupError> {
+    fn transcribe_sq_bracket_l<O: Write>(&mut self, output: &mut O) -> SamupResult<Option<C>> {
         match self.prev_c {
             C::Underscore => {
                 Tag::I.write_open(output)?;
-                self.tag_stack.push_front(Tag::I);
+                self.push_tag(Tag::I);
             }
             C::Asterisk => {
                 Tag::Strong.write_open(output)?;
-                self.tag_stack.push_front(Tag::I);
+                self.push_tag(Tag::I);
             }
             C::SqBracketL => {
                 output.write_all(b"[")?;
             }
-            C::SqBracketR => match self.tag_stack.pop_front() {
+            C::SqBracketR => match self.pop_tag() {
                 Some(tag @ Tag::Link(_)) => {
                     tag.write_link_no_title(output)?;
                 }
                 Some(tag) => {
-                    self.tag_stack.push_front(tag);
+                    self.push_tag(tag);
                 }
                 None => (),
             },
             C::Caret => {
                 output.write_all(b"[^")?;
             }
-            C::ParenR => match self.tag_stack.pop_front() {
+            C::ParenR => match self.pop_tag() {
                 Some(tag @ Tag::Link(_)) => {
                     tag.write_close(output)?;
                 }
                 Some(tag) => {
                     output.write_all(b")")?;
-                    self.tag_stack.push_front(tag);
+                    self.push_tag(tag);
                 }
                 None => (),
             },
-            C::Digit => match self.tag_stack.pop_front() {
+            C::Digit => match self.pop_tag() {
                 Some(Tag::FootNoteLink(n)) | Some(Tag::FootNoteRef(n)) => {
                     let n = n.ix();
                     output.write_fmt(format_args!("[^{n}]"))?;
                 }
-                Some(tag) => self.tag_stack.push_front(tag),
+                Some(tag) => self.push_tag(tag),
                 None => (),
             },
-            C::Colon => match self.tag_stack.pop_front() {
+            C::Colon => match self.pop_tag() {
                 Some(tag @ Tag::FootNoteRef(_)) => {
                     tag.write_open(output)?;
-                    self.tag_stack.push_front(tag);
+                    self.push_tag(tag);
                 }
                 Some(tag) => {
-                    self.tag_stack.push_front(tag);
+                    self.push_tag(tag);
                 }
                 None => (),
             },
-            C::ParenL => match self.tag_stack.pop_front() {
+            C::ParenL => match self.pop_tag() {
                 Some(Tag::Link(ref url)) => {
                     output.write_fmt(format_args!("[{url}]("))?;
                 }
                 Some(tag) => {
                     output.write_all(b"(")?;
-                    self.tag_stack.push_front(tag);
+                    self.push_tag(tag);
                 }
                 None => {
                     output.write_all(b"(")?;
                 }
             },
-            C::Content | C::Newline | C::Whitespace => (),
+            C::Newline => {
+                output.write_all("\n")?;
+            }
+            C::Content | C::Whitespace => (),
         };
         Ok(None)
     }
-    fn transcribe_sq_bracket_r<O: Write>(
-        &mut self,
-        output: &mut O,
-    ) -> Result<Option<C>, SamupError> {
+    fn transcribe_sq_bracket_r<O: Write>(&mut self, output: &mut O) -> SamupResult<Option<C>> {
         let mut next_c: Option<C> = None;
-        match self.tag_stack.pop_front() {
+        match self.pop_tag() {
             Some(mut tag @ Tag::Link(_)) => match self.prev_c {
                 C::Whitespace => {
-                    self.tag_stack.push_front(tag);
+                    self.push_tag(tag);
                 }
                 C::Newline => {
                     let url = tag.link_url();
@@ -592,44 +688,44 @@ impl Transcriber {
                 }
                 C::Underscore => {
                     tag.push_link("_");
-                    self.tag_stack.push_front(tag);
+                    self.push_tag(tag);
                 }
                 C::Asterisk => {
                     tag.push_link("*");
-                    self.tag_stack.push_front(tag);
+                    self.push_tag(tag);
                 }
                 C::Caret => {
                     tag.push_link("^");
-                    self.tag_stack.push_front(tag);
+                    self.push_tag(tag);
                 }
                 C::Colon => {
                     tag.push_link(":");
-                    self.tag_stack.push_front(tag);
+                    self.push_tag(tag);
                 }
                 C::SqBracketL => {
                     tag.push_link("[");
-                    self.tag_stack.push_front(tag);
+                    self.push_tag(tag);
                 }
                 C::SqBracketR => {
                     tag.push_link("]");
-                    self.tag_stack.push_front(tag);
+                    self.push_tag(tag);
                 }
                 C::ParenL => {
                     tag.push_link("(");
-                    self.tag_stack.push_front(tag)
+                    self.push_tag(tag)
                 }
                 C::ParenR => {
                     tag.push_link(")");
-                    self.tag_stack.push_front(tag)
+                    self.push_tag(tag)
                 }
-                C::Digit | C::Content => self.tag_stack.push_front(tag),
+                C::Digit | C::Content => self.push_tag(tag),
             },
             Some(tag @ Tag::FootNoteLink(_)) | Some(tag @ Tag::FootNoteRef(_)) => {
-                self.tag_stack.push_front(tag);
+                self.push_tag(tag);
             }
             Some(tag) => {
                 output.write_all(b"]")?;
-                self.tag_stack.push_front(tag);
+                self.push_tag(tag);
                 next_c = Some(C::Content);
             }
             None => {
@@ -639,9 +735,12 @@ impl Transcriber {
         }
         Ok(next_c)
     }
-    fn transcribe_paren<O: Write>(&mut self, output: &mut O) -> Result<Option<C>, SamupError> {
+    fn transcribe_paren<O: Write>(&mut self, output: &mut O) -> SamupResult<Option<C>> {
         match self.prev_c {
-            C::Whitespace | C::Newline | C::Content => (),
+            C::Whitespace | C::Content => (),
+            C::Newline => {
+                output.write_all(b"\n")?;
+            }
             C::SqBracketL => {
                 output.write_all(b"[")?;
             }
@@ -651,17 +750,17 @@ impl Transcriber {
             C::ParenR => {
                 output.write_all(b")")?;
             }
-            C::SqBracketR => match self.tag_stack.pop_front() {
+            C::SqBracketR => match self.pop_tag() {
                 Some(tag @ Tag::Link(_)) => {
                     tag.write_open(output)?;
-                    self.tag_stack.push_front(tag);
+                    self.push_tag(tag);
                 }
                 Some(tag @ Tag::FootNoteLink(_)) => {
                     tag.write_open(output)?;
                 }
                 Some(tag) => {
                     output.write_all(b"]")?;
-                    self.tag_stack.push_front(tag);
+                    self.push_tag(tag);
                 }
                 None => {
                     output.write_all(b"]")?;
@@ -669,33 +768,33 @@ impl Transcriber {
             },
             C::Underscore => {
                 Tag::I.write_open(output)?;
-                self.tag_stack.push_front(Tag::I);
+                self.push_tag(Tag::I);
             }
             C::Asterisk => {
                 Tag::Strong.write_open(output)?;
-                self.tag_stack.push_front(Tag::Strong);
+                self.push_tag(Tag::Strong);
             }
             C::Caret => output.write_all(b"[^")?,
-            C::Colon => match self.tag_stack.pop_front() {
+            C::Colon => match self.pop_tag() {
                 Some(tag @ Tag::FootNoteRef(_)) => {
                     tag.write_open(output)?;
-                    self.tag_stack.push_front(tag);
+                    self.push_tag(tag);
                 }
                 Some(tag) => {
                     output.write_all(b":")?;
-                    self.tag_stack.push_front(tag);
+                    self.push_tag(tag);
                 }
                 None => {
                     output.write_all(b":")?;
                 }
             },
-            C::Digit => match self.tag_stack.pop_front() {
+            C::Digit => match self.pop_tag() {
                 Some(Tag::FootNoteLink(n)) | Some(Tag::FootNoteRef(n)) => {
                     let n = n.ix();
                     output.write_fmt(format_args!("[^{n}"))?;
                 }
                 // unreachable?
-                Some(tag) => self.tag_stack.push_front(tag),
+                Some(tag) => self.push_tag(tag),
                 // unreachable?
                 None => (),
             },
@@ -706,21 +805,21 @@ impl Transcriber {
         &mut self,
         curr_char: u8,
         output: &mut O,
-    ) -> Result<Option<C>, SamupError> {
+    ) -> SamupResult<Option<C>> {
         let mut next_c: Option<C> = None;
-        match self.tag_stack.pop_front() {
+        match self.pop_tag() {
             Some(tag @ Tag::FootNoteLink(mut n)) | Some(tag @ Tag::FootNoteRef(mut n)) => {
                 n.push_digit(curr_char);
-                self.tag_stack.push_front(tag);
+                self.push_tag(tag);
             }
             Some(mut tag @ Tag::Link(_)) => {
                 tag.push_link(str::from_utf8(&[curr_char]).unwrap());
-                self.tag_stack.push_front(tag);
+                self.push_tag(tag);
                 next_c = Some(C::Content);
             }
             Some(tag) => {
                 output.write_all(&[curr_char])?;
-                self.tag_stack.push_front(tag);
+                self.push_tag(tag);
                 next_c = Some(C::Content);
             }
             None => {
@@ -729,6 +828,56 @@ impl Transcriber {
             }
         };
         Ok(next_c)
+    }
+    fn transcribe_content<O: Write>(
+        &mut self,
+        curr_char: u8,
+        output: &mut O,
+    ) -> SamupResult<Option<C>> {
+        match self.prev_c {
+            C::Whitespace | C::Content => match self.pop_tag() {
+                None => {
+                    Tag::P.write_open(output)?;
+                    self.push_tag(Tag::P);
+                }
+                Some(tag) => {
+                    self.push_tag(tag);
+                }
+            },
+            C::Underscore => match self.pop_tag() {
+                None => {
+                    Tag::P.write_open(output)?;
+                    output.write_all(b"_")?;
+                    self.push_tag(Tag::P);
+                }
+                Some(tag) => {
+                    output.write_all(b"_")?;
+                    self.push_tag(tag);
+                }
+            },
+            C::Asterisk => match self.pop_tag() {
+                None => {
+                    Tag::P.write_open(output)?;
+                    output.write_all(b"*")?;
+                    self.push_tag(Tag::P);
+                }
+                Some(tag) => {
+                    output.write_all(b"*")?;
+                    self.push_tag(tag);
+                }
+            },
+        }
+        output.write_all(&[curr_char])?;
+        Ok(None)
+    }
+    fn push_tag(&mut self, tag: Tag) {
+        self.tag_stack.push_front(tag);
+    }
+    fn pop_tag(&mut self) -> Option<Tag> {
+        self.tag_stack.pop_front()
+    }
+    fn stack_empty(&self) -> bool {
+        self.tag_stack.front().is_none()
     }
 }
 

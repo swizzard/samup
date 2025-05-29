@@ -4,7 +4,7 @@ use thiserror::Error;
 pub mod transcriber;
 pub use transcriber::Transcriber;
 
-pub fn transcribe<O: Write>(input: &[u8], output: &mut O) -> Result<(), SamupError> {
+pub fn transcribe<O: Write>(input: &[u8], output: &mut O) -> SamupResult {
     let mut transcriber = Transcriber::new();
     while transcriber.ix < input.len() {
         transcriber.transcribe(input, output)?;
@@ -24,16 +24,8 @@ pub enum SamupError {
     #[error("syntax error")]
     Syntax,
 }
-//
-// impl SamupError {
-//     fn stack(expected: Tag, got: Option<Tag>) -> Self {
-//         if let Some(got) = got {
-//             Self::BadStack { expected, got }
-//         } else {
-//             Self::ShortStack { expected }
-//         }
-//     }
-// }
+
+pub type SamupResult<T = ()> = Result<T, SamupError>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum C {
