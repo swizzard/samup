@@ -12,13 +12,11 @@ fn test_whitespace_content() -> SamupResult {
 }
 
 #[test]
-fn test_block() -> SamupResult {
+fn test_paragraph() -> SamupResult {
     let mut output = Vec::new();
     let input = b"abc\n\ndef";
-    let expected_out = b"<p>cba</p>\n<p>fed</p>";
+    let expected_out = b"<p>abc</p>\n<p>def</p>";
     transcribe(input, &mut output)?;
-    let s = unsafe { str::from_utf8_unchecked(&output) };
-    println!("{s}");
     let o: &[u8] = output.as_ref();
     assert_eq!(&expected_out, &o);
     Ok(())
@@ -40,6 +38,19 @@ fn test_inline() -> SamupResult {
     assert_eq!(&expected_out, &o, "unterminated");
     Ok(())
 }
+
+// #[test]
+// fn test_h() -> SamupResult {
+//     let mut output = Vec::new();
+//     let input = b"# highlight 1\ncontent";
+//     let expected_output = b"<h1>highlight 1</h1><p>content</p>";
+//     transcribe(input, &mut output)?;
+//     let s = unsafe { str::from_utf8_unchecked(&output) };
+//     println!("test_h actually {s}");
+//     let o: &[u8] = output.as_ref();
+//     assert_eq!(&expected_output, &o);
+//     Ok(())
+// }
 
 // #[test]
 // fn test_link

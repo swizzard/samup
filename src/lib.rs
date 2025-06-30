@@ -171,6 +171,9 @@ impl Tag {
             }
         }
     }
+    fn new_link(c: u8) -> Self {
+        Tag::Link(format!("{c}"))
+    }
     fn write_link_no_title<O: Write>(&self, output: &mut O) -> Result<(), io::Error> {
         if let Tag::Link(url) = self {
             write!(output, "<a href=\"{url}\" target=\"_blank\">{url}</a>")
