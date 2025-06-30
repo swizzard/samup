@@ -33,6 +33,7 @@ pub enum C {
     Newline,
     Underscore,
     Asterisk,
+    Octothorpe,
     // NOTE: only in FootNoteLink or FootNoteRef
     Caret,
     // NOTE: only in FootNoteRef
@@ -57,6 +58,8 @@ impl From<u8> for C {
             95 => C::Underscore,
             // *
             42 => C::Asterisk,
+            // #
+            35 => C::Octothorpe,
             // ^ (NOTE: only in FootNoteLink or FootNoteRef)
             94 => C::Caret,
             // : (NOTE: only in FootNoteRef)
@@ -96,10 +99,40 @@ impl FootNoteIx {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HLevel(u8);
+
+impl HLevel {
+    fn new() -> Self {
+        Self(1)
+    }
+    fn level(&self) -> u8 {
+        self.0
+    }
+    fn inc_level(&mut self) -> bool {
+        if self.0 < 6 {
+            self.0 += 1;
+            true
+        } else {
+            false
+        }
+    }
+    fn as_octothorpes(&self) -> &[u8] {
+        match self.0 {
+            1 => b"#",
+            2 => b"##",
+            3 => b"###",
+            4 => b"####",
+            5 => b"#####",
+            6 => b"######",
+            _ => panic!("unreachable HLevel"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Tag {
-    H1,
-    H2,
+    H(HLevel),
     I,
     P,
     Strong,
@@ -113,8 +146,10 @@ pub enum Tag {
 impl std::fmt::Display for Tag {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         match self {
-            Tag::H1 => f.write_str("<h1>"),
-            Tag::H2 => f.write_str("<h2>"),
+            Tag::H(n) => {
+                let level = n.level();
+                f.write_fmt(format_args!("<h{level}>"))
+            }
             Tag::I => f.write_str("<i>"),
             Tag::P => f.write_str("<p>"),
             Tag::Strong => f.write_str("<strong>"),
@@ -134,8 +169,10 @@ impl std::fmt::Display for Tag {
 impl Tag {
     fn write_open<O: Write>(&self, output: &mut O) -> Result<(), io::Error> {
         match self {
-            Tag::H1 => output.write_all(b"<h1>"),
-            Tag::H2 => output.write_all(b"<h2>"),
+            Tag::H(n) => {
+                let level = n.level();
+                output.write_fmt(format_args!("<h{level}>"))
+            }
             Tag::I => output.write_all(b"<i>"),
             Tag::P => output.write_all(b"<p>"),
             Tag::Strong => output.write_all(b"<strong>"),
@@ -158,8 +195,10 @@ impl Tag {
     }
     fn write_close<O: Write>(&self, output: &mut O) -> Result<(), io::Error> {
         match self {
-            Tag::H1 => output.write_all(b"</h1>"),
-            Tag::H2 => output.write_all(b"</h2>"),
+            Tag::H(n) => {
+                let level = n.level();
+                output.write_fmt(format_args!("<h{level}>"))
+            }
             Tag::I => output.write_all(b"</i>"),
             Tag::P => output.write_all(b"</p>"),
             Tag::Strong => output.write_all(b"</strong>"),
@@ -190,5 +229,15 @@ impl Tag {
     }
     fn link_url(&self) -> &str {
         if let Tag::Link(u) = self { u } else { panic!() }
+    }
+    fn new_h() -> Self {
+        Tag::H(HLevel::new())
+    }
+    fn inc_h(&mut self) -> bool {
+        if let Tag::H(n) = self {
+            n.inc_level()
+        } else {
+            panic!()
+        }
     }
 }
