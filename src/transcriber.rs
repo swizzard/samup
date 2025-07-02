@@ -1,4 +1,4 @@
-use crate::{C, SamupResult, Tag};
+use crate::{C, InnerLink, LinkState, SamupResult, Tag};
 use std::collections::VecDeque;
 use std::io::Write;
 
@@ -84,9 +84,8 @@ impl Transcriber {
                 Some(tag @ Tag::Link(_)) => {
                     tag.write_link_no_title(output)?;
                 }
-                Some(Tag::FootNoteLink(n)) | Some(Tag::FootNoteRef(n)) => {
-                    let n = n.ix();
-                    output.write_fmt(format_args!("[^{n}]"))?;
+                Some(tag @ Tag::FootNoteLink(_)) | Some(tag @ Tag::FootNoteRef(_)) => {
+                    tag.write_close(output)?;
                 }
                 _ => output.write_all(b"]")?,
             },
@@ -558,10 +557,6 @@ impl Transcriber {
                 }
             },
             C::SqBracketL => {
-                // if self.stack_empty() {
-                //     Tag::P.write_open(output)?;
-                //     self.push_tag(Tag::P);
-                // };
                 output.write_all(b"[")?;
                 Tag::Strong.write_open(output)?;
                 self.push_tag(Tag::Strong);
@@ -744,25 +739,31 @@ impl Transcriber {
         Ok(next_c)
     }
     fn transcribe_colon<O: Write>(&mut self, output: &mut O) -> SamupResult<Option<C>> {
-        let mut next_c = None;
         match self.prev_c {
-            C::SqBracketR => (),
-            _ => {
-                match self.pop_tag() {
-                    Some(mut tag @ Tag::Link(_)) => {
-                        tag.push_link(":");
-                        self.push_tag(tag);
-                    }
-                    Some(tag) => {
-                        output.write_all(b":")?;
-                        self.push_tag(tag);
-                    }
-                    None => output.write_all(b":")?,
+            C::SqBracketR => match self.pop_tag() {
+                Some(Tag::FootNoteLink(n)) => {
+                    self.push_tag(Tag::FootNoteRef(n));
+                    return Ok(None);
                 }
-                next_c = Some(C::Content);
-            }
+                Some(tag) => {
+                    output.write_all(b"]:")?;
+                    self.push_tag(tag);
+                }
+                None => output.write_all(b"]:")?,
+            },
+            _ => match self.pop_tag() {
+                Some(mut tag @ Tag::Link(_)) => {
+                    tag.push_link(":");
+                    self.push_tag(tag);
+                }
+                Some(tag) => {
+                    output.write_all(b":")?;
+                    self.push_tag(tag);
+                }
+                None => output.write_all(b":")?,
+            },
         };
-        Ok(next_c)
+        Ok(Some(C::Content))
     }
     fn transcribe_sq_bracket_l<O: Write>(&mut self, output: &mut O) -> SamupResult<Option<C>> {
         match self.prev_c {
@@ -864,13 +865,19 @@ impl Transcriber {
     fn transcribe_sq_bracket_r<O: Write>(&mut self, output: &mut O) -> SamupResult<Option<C>> {
         let mut next_c: Option<C> = None;
         match self.pop_tag() {
-            Some(mut tag @ Tag::Link(_)) => match self.prev_c {
+            Some(
+                mut tag @ Tag::Link(InnerLink {
+                    state: LinkState::Link,
+                    ..
+                }),
+            ) => match self.prev_c {
                 C::Whitespace => {
                     self.push_tag(tag);
                 }
                 C::Newline => {
                     let url = tag.link_url();
                     output.write_fmt(format_args!("{url}\n]"))?;
+                    return Ok(next_c);
                 }
                 C::Underscore => {
                     tag.push_link("_");
@@ -910,6 +917,55 @@ impl Transcriber {
                 }
                 C::Digit | C::Content => self.push_tag(tag),
             },
+            Some(
+                tag @ Tag::Link(InnerLink {
+                    state: LinkState::Label,
+                    ..
+                }),
+            ) => match self.prev_c {
+                C::Newline => {
+                    let url = tag.link_url();
+                    output.write_fmt(format_args!("{url}\n]"))?;
+                }
+                C::Underscore => {
+                    output.write_all(b"_")?;
+                    self.push_tag(tag);
+                }
+                C::Asterisk => {
+                    output.write_all(b"*")?;
+                    self.push_tag(tag);
+                }
+                C::Caret => {
+                    output.write_all(b"^")?;
+                    self.push_tag(tag);
+                }
+                C::Colon => {
+                    output.write_all(b":")?;
+                    self.push_tag(tag);
+                }
+                C::SqBracketL => {
+                    output.write_all(b"[")?;
+                    self.push_tag(tag);
+                }
+                C::SqBracketR => {
+                    output.write_all(b"]")?;
+                    self.push_tag(tag);
+                }
+                C::ParenL => {
+                    output.write_all(b"(")?;
+                    self.push_tag(tag)
+                }
+                C::ParenR => {
+                    output.write_all(b")")?;
+                    self.push_tag(tag)
+                }
+                C::Octothorpe => {
+                    output.write_all(b"#")?;
+                    self.push_tag(tag)
+                }
+                C::Digit | C::Content | C::Whitespace => self.push_tag(tag),
+            },
+
             Some(tag @ Tag::FootNoteLink(_)) | Some(tag @ Tag::FootNoteRef(_)) => {
                 self.push_tag(tag);
             }
@@ -939,8 +995,14 @@ impl Transcriber {
                 output.write_all(b")")?;
             }
             C::SqBracketR => match self.pop_tag() {
-                Some(tag @ Tag::Link(_)) => {
+                Some(
+                    mut tag @ Tag::Link(InnerLink {
+                        state: LinkState::Link,
+                        ..
+                    }),
+                ) => {
                     tag.write_open(output)?;
+                    tag.end_url();
                     self.push_tag(tag);
                 }
                 Some(tag @ Tag::FootNoteLink(_)) => {
@@ -1005,28 +1067,45 @@ impl Transcriber {
         curr_char: u8,
         output: &mut O,
     ) -> SamupResult<Option<C>> {
-        let mut next_c: Option<C> = None;
-        match self.pop_tag() {
-            Some(tag @ Tag::FootNoteLink(mut n)) | Some(tag @ Tag::FootNoteRef(mut n)) => {
-                n.push_digit(curr_char);
-                self.push_tag(tag);
+        if self.prev_c == C::Caret {
+            match self.pop_tag() {
+                // no nested footnotes
+                Some(Tag::FootNoteLink(n)) | Some(Tag::FootNoteRef(n)) => {
+                    let ix = n.ix();
+                    let c = crate::char_to_digit(curr_char);
+                    output.write_fmt(format_args!("[^{ix}{c}"))?
+                }
+                Some(tag) => {
+                    self.push_tag(tag);
+                    self.push_tag(Tag::new_fn_link(curr_char));
+                    return Ok(None);
+                }
+                None => {
+                    self.push_tag(Tag::new_fn_link(curr_char));
+                    return Ok(None);
+                }
             }
-            Some(mut tag @ Tag::Link(_)) => {
-                tag.push_link(str::from_utf8(&[curr_char]).unwrap());
-                self.push_tag(tag);
-                next_c = Some(C::Content);
-            }
-            Some(tag) => {
-                output.write_all(&[curr_char])?;
-                self.push_tag(tag);
-                next_c = Some(C::Content);
-            }
-            None => {
-                output.write_all(&[curr_char])?;
-                next_c = Some(C::Content);
-            }
-        };
-        Ok(next_c)
+        } else {
+            match self.pop_tag() {
+                Some(mut tag @ Tag::FootNoteLink(_)) | Some(mut tag @ Tag::FootNoteRef(_)) => {
+                    tag.push_fn_digit(curr_char);
+                    self.push_tag(tag);
+                    return Ok(None);
+                }
+                Some(mut tag @ Tag::Link(_)) => {
+                    tag.push_link(str::from_utf8(&[curr_char]).unwrap());
+                    self.push_tag(tag);
+                }
+                Some(tag) => {
+                    output.write_all(&[curr_char])?;
+                    self.push_tag(tag);
+                }
+                None => {
+                    output.write_all(&[curr_char])?;
+                }
+            };
+        }
+        Ok(Some(C::Content))
     }
     fn transcribe_content<O: Write>(
         &mut self,
@@ -1039,10 +1118,13 @@ impl Transcriber {
                     Tag::P.write_open(output)?;
                     self.push_tag(Tag::P);
                 }
-                Some(mut tag @ Tag::Link(_)) => {
-                    let cc = &[curr_char];
-                    let s = unsafe { str::from_utf8_unchecked(cc) };
-                    tag.push_link(s);
+                Some(
+                    mut tag @ Tag::Link(InnerLink {
+                        state: LinkState::Link,
+                        ..
+                    }),
+                ) => {
+                    tag.push_link(str::from_utf8(&[curr_char]).unwrap());
                     self.push_tag(tag);
                     return Ok(None);
                 }

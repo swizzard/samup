@@ -72,8 +72,8 @@ fn test_link_no_label() -> SamupResult {
     let expected_output =
         b"\n<p><a href=\"https://swizzard.pizza\" target=\"_blank\">https://swizzard.pizza</a></p>";
     transcribe(input, &mut output)?;
-    // let s = unsafe { str::from_utf8_unchecked(&output) };
-    // println!("test_link actually {s}");
+    let s = unsafe { str::from_utf8_unchecked(&output) };
+    println!("test_link_no_label actually {s}");
     let o: &[u8] = output.as_ref();
     assert_eq!(&expected_output, &o, "link no label");
     Ok(())
@@ -86,9 +86,31 @@ fn test_link_label() -> SamupResult {
     let expected_output =
         b"\n<p><a href=\"https://swizzard.pizza\" target=\"_blank\">my website</a></p>";
     transcribe(input, &mut output)?;
-    let s = unsafe { str::from_utf8_unchecked(&output) };
-    println!("test_link actually {s}");
     let o: &[u8] = output.as_ref();
     assert_eq!(&expected_output, &o, "link label");
     Ok(())
 }
+
+#[test]
+fn test_foot_note_link() -> SamupResult {
+    let mut output = Vec::new();
+    let input = b"note[^1]";
+    let expected_output = b"<p>note<a id=\"link-1\" target=\"#ref-1\"><sup>1</sup></a></p>";
+    transcribe(input, &mut output)?;
+    // let s = unsafe { str::from_utf8_unchecked(&output) };
+    // println!("test_foot_note_link actually {s}");
+    let o: &[u8] = output.as_ref();
+    assert_eq!(&expected_output, &o, "foot note link");
+    output.clear();
+    let input = b"note[^12]";
+    let expected_output = b"<p>note<a id=\"link-12\" target=\"#ref-12\"><sup>12</sup></a></p>";
+    transcribe(input, &mut output)?;
+    let s = unsafe { str::from_utf8_unchecked(&output) };
+    println!("test_foot_note_link actually {s}");
+    let o: &[u8] = output.as_ref();
+    assert_eq!(&expected_output, &o, "foot note link");
+    Ok(())
+}
+
+// #[test]
+// fn test_foot_note_ref() -> SamupResult {}
