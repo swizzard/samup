@@ -13,7 +13,7 @@ impl Transcriber {
     pub fn new() -> Self {
         Self {
             ix: 0,
-            prev_c: C::Whitespace,
+            prev_c: C::Newline,
             tag_stack: VecDeque::new(),
         }
     }
@@ -167,7 +167,7 @@ impl Transcriber {
             C::Octothorpe => match self.pop_tag() {
                 Some(tag @ Tag::H(_)) => {
                     tag.write_open(output)?;
-                    output.write_all(&[curr_char])?;
+                    self.push_tag(tag)
                 }
                 Some(tag) => {
                     output.write_fmt(format_args!("#{curr_char}"))?;
@@ -398,6 +398,7 @@ impl Transcriber {
             C::Octothorpe => match self.pop_tag() {
                 Some(tag @ Tag::H(_)) => {
                     tag.write_open(output)?;
+                    self.push_tag(tag);
                     Tag::I.write_open(output)?;
                     self.push_tag(Tag::I);
                 }
@@ -518,6 +519,7 @@ impl Transcriber {
             C::Octothorpe => match self.pop_tag() {
                 Some(tag @ Tag::H(_)) => {
                     tag.write_open(output)?;
+                    self.push_tag(tag);
                     Tag::Strong.write_open(output)?;
                     self.push_tag(Tag::Strong);
                 }
@@ -621,7 +623,21 @@ impl Transcriber {
     fn transcribe_octothorpe<O: Write>(&mut self, output: &mut O) -> SamupResult<Option<C>> {
         match self.prev_c {
             C::Content | C::Whitespace => (),
-            C::Newline => self.push_tag(Tag::new_h()),
+            C::Newline => {
+                match self.pop_tag() {
+                    Some(tag @ Tag::H(_)) => {
+                        tag.write_close(output)?;
+                        output.write_all(b"\n")?;
+                    }
+                    Some(tag) => {
+                        output.write_all(b"\n")?;
+                        self.push_tag(tag)
+                    }
+                    None => output.write_all(b"\n")?,
+                }
+                self.push_tag(Tag::new_h());
+                return Ok(Some(C::Octothorpe));
+            }
             C::Octothorpe => match self.pop_tag() {
                 Some(mut tag @ Tag::H(_)) => {
                     if !tag.inc_h() {
@@ -732,7 +748,17 @@ impl Transcriber {
         match self.prev_c {
             C::SqBracketR => (),
             _ => {
-                output.write_all(b":")?;
+                match self.pop_tag() {
+                    Some(mut tag @ Tag::Link(_)) => {
+                        tag.push_link(":");
+                        self.push_tag(tag);
+                    }
+                    Some(tag) => {
+                        output.write_all(b":")?;
+                        self.push_tag(tag);
+                    }
+                    None => output.write_all(b":")?,
+                }
                 next_c = Some(C::Content);
             }
         };
@@ -815,7 +841,21 @@ impl Transcriber {
                 }
             },
             C::Newline => {
-                output.write_all(b"\n")?;
+                match self.pop_tag() {
+                    Some(tag @ Tag::H(_)) => {
+                        tag.write_close(output)?;
+                        output.write_all(b"\n")?;
+                    }
+                    Some(tag) => {
+                        output.write_all(b"\n")?;
+                        self.push_tag(tag);
+                    }
+                    None => {
+                        output.write_all(b"\n")?;
+                        Tag::P.write_open(output)?;
+                        self.push_tag(Tag::P);
+                    }
+                };
             }
             C::Content | C::Whitespace => (),
         };
@@ -1063,7 +1103,8 @@ impl Transcriber {
                     Some(tag) => self.push_tag(tag),
                     None => (),
                 };
-                self.push_tag(Tag::new_link(curr_char))
+                self.push_tag(Tag::new_link(curr_char));
+                return Ok(None);
             }
             C::SqBracketR => match self.pop_tag() {
                 Some(tag @ Tag::Link(_)) | Some(tag @ Tag::FootNoteLink(_)) => {

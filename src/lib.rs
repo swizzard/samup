@@ -197,7 +197,7 @@ impl Tag {
         match self {
             Tag::H(n) => {
                 let level = n.level();
-                output.write_fmt(format_args!("<h{level}>"))
+                output.write_fmt(format_args!("</h{level}>"))
             }
             Tag::I => output.write_all(b"</i>"),
             Tag::P => output.write_all(b"</p>"),
@@ -211,7 +211,8 @@ impl Tag {
         }
     }
     fn new_link(c: u8) -> Self {
-        Tag::Link(format!("{c}"))
+        let c: &[u8] = &[c];
+        Tag::Link((unsafe { str::from_utf8_unchecked(c) }).into())
     }
     fn write_link_no_title<O: Write>(&self, output: &mut O) -> Result<(), io::Error> {
         if let Tag::Link(url) = self {
