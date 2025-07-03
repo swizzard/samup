@@ -70,7 +70,7 @@ fn test_link_no_label() -> SamupResult {
     let mut output = Vec::new();
     let input = b"[https://swizzard.pizza]";
     let expected_output =
-        b"<a href=\"https://swizzard.pizza\" target=\"_blank\">https://swizzard.pizza</a>";
+        b"<p><a href=\"https://swizzard.pizza\" target=\"_blank\">https://swizzard.pizza</a></p>";
     transcribe(input, &mut output)?;
     let s = unsafe { str::from_utf8_unchecked(&output) };
     println!("test_link_no_label actually {s}");
