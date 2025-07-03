@@ -1,5 +1,4 @@
 use std::io::{self, Write};
-use thiserror::Error;
 
 pub mod transcriber;
 pub use transcriber::Transcriber;
@@ -9,23 +8,10 @@ pub fn transcribe<O: Write>(input: &[u8], output: &mut O) -> SamupResult {
     while transcriber.ix < input.len() {
         transcriber.transcribe(input, output)?;
     }
-    transcriber.finish(output)?;
-    Ok(())
+    transcriber.finish(output)
 }
 
-#[derive(Error, Debug)]
-pub enum SamupError {
-    #[error("io error: {0}")]
-    Io(#[from] io::Error),
-    #[error("bad stack: expected {expected} got {got}")]
-    BadStack { expected: Tag, got: Tag },
-    #[error("bad stack: expected {expected} got None")]
-    ShortStack { expected: Tag },
-    #[error("syntax error")]
-    Syntax,
-}
-
-pub type SamupResult<T = ()> = Result<T, SamupError>;
+pub type SamupResult<T = ()> = Result<T, io::Error>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum C {
