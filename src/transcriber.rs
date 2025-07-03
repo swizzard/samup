@@ -191,7 +191,15 @@ impl Transcriber {
                     output.write_fmt(format_args!(":{curr_char}"))?;
                 }
             },
-            C::SqBracketL => output.write_fmt(format_args!("[{curr_char}"))?,
+            C::SqBracketL => {
+                if self.stack_empty() {
+                    Tag::P.write_open(output)?;
+                    output.write_fmt(format_args!("[{curr_char}"))?;
+                    self.push_tag(Tag::P);
+                } else {
+                    output.write_fmt(format_args!("[{curr_char}"))?
+                }
+            }
             C::SqBracketR => match self.pop_tag() {
                 Some(tag @ Tag::Link(_)) => {
                     tag.write_link_no_title(output)?;
@@ -327,7 +335,15 @@ impl Transcriber {
             C::Caret => {
                 output.write_fmt(format_args!("[^{curr_char}"))?;
             }
-            C::SqBracketL => output.write_fmt(format_args!("[{curr_char}"))?,
+            C::SqBracketL => {
+                if self.stack_empty() {
+                    Tag::P.write_open(output)?;
+                    output.write_fmt(format_args!("[{curr_char}"))?;
+                    self.push_tag(Tag::P);
+                } else {
+                    output.write_fmt(format_args!("[{curr_char}"))?;
+                }
+            }
             C::SqBracketR => match self.pop_tag() {
                 Some(tag @ Tag::Link(_)) => {
                     tag.write_link_no_title(output)?;
@@ -436,6 +452,10 @@ impl Transcriber {
                 }
             },
             C::SqBracketL => {
+                if self.stack_empty() {
+                    Tag::P.write_open(output)?;
+                    self.push_tag(Tag::P);
+                };
                 output.write_all(b"[")?;
                 Tag::I.write_open(output)?;
                 self.push_tag(Tag::I);
@@ -557,6 +577,10 @@ impl Transcriber {
                 }
             },
             C::SqBracketL => {
+                if self.stack_empty() {
+                    Tag::P.write_open(output)?;
+                    self.push_tag(Tag::P);
+                };
                 output.write_all(b"[")?;
                 Tag::Strong.write_open(output)?;
                 self.push_tag(Tag::Strong);
@@ -660,10 +684,12 @@ impl Transcriber {
             }
             C::SqBracketL => {
                 match self.pop_tag() {
-                    None
-                    | Some(Tag::Link(_))
-                    | Some(Tag::FootNoteRef(_))
-                    | Some(Tag::FootNoteLink(_)) => (),
+                    None => {
+                        Tag::P.write_open(output)?;
+                        self.push_tag(Tag::P);
+                    }
+                    Some(Tag::Link(_)) | Some(Tag::FootNoteRef(_)) | Some(Tag::FootNoteLink(_)) => {
+                    }
                     Some(tag) => self.push_tag(tag),
                 }
                 output.write_all(b"[")?;
@@ -787,6 +813,10 @@ impl Transcriber {
                 None => output.write_all(b"#")?,
             },
             C::SqBracketL => {
+                if self.stack_empty() {
+                    Tag::P.write_open(output)?;
+                    self.push_tag(Tag::P);
+                }
                 output.write_all(b"[")?;
             }
             C::SqBracketR => match self.pop_tag() {
@@ -851,11 +881,7 @@ impl Transcriber {
                         output.write_all(b"\n")?;
                         self.push_tag(tag);
                     }
-                    None => {
-                        output.write_all(b"\n")?;
-                        Tag::P.write_open(output)?;
-                        self.push_tag(Tag::P);
-                    }
+                    None => (),
                 };
             }
             C::Content | C::Whitespace => (),
@@ -986,6 +1012,10 @@ impl Transcriber {
             C::Whitespace | C::Content => (),
             C::Newline => (),
             C::SqBracketL => {
+                if self.stack_empty() {
+                    Tag::P.write_open(output)?;
+                    self.push_tag(Tag::P);
+                }
                 output.write_all(b"[")?;
             }
             C::ParenL => {
@@ -1183,7 +1213,7 @@ impl Transcriber {
                         output.write_fmt(format_args!("[{s}"))?;
                     }
                     Some(tag) => self.push_tag(tag),
-                    None => (),
+                    None => {}
                 };
                 self.push_tag(Tag::new_link(curr_char));
                 return Ok(None);
@@ -1239,9 +1269,9 @@ impl Transcriber {
     fn pop_tag(&mut self) -> Option<Tag> {
         self.tag_stack.pop_front()
     }
-    // fn stack_empty(&self) -> bool {
-    //     self.tag_stack.front().is_none()
-    // }
+    fn stack_empty(&self) -> bool {
+        self.tag_stack.front().is_none()
+    }
 }
 
 impl Default for Transcriber {

@@ -70,7 +70,7 @@ fn test_link_no_label() -> SamupResult {
     let mut output = Vec::new();
     let input = b"[https://swizzard.pizza]";
     let expected_output =
-        b"\n<p><a href=\"https://swizzard.pizza\" target=\"_blank\">https://swizzard.pizza</a></p>";
+        b"<a href=\"https://swizzard.pizza\" target=\"_blank\">https://swizzard.pizza</a>";
     transcribe(input, &mut output)?;
     let s = unsafe { str::from_utf8_unchecked(&output) };
     println!("test_link_no_label actually {s}");
@@ -83,8 +83,7 @@ fn test_link_no_label() -> SamupResult {
 fn test_link_label() -> SamupResult {
     let mut output = Vec::new();
     let input = b"[https://swizzard.pizza](my website)";
-    let expected_output =
-        b"\n<p><a href=\"https://swizzard.pizza\" target=\"_blank\">my website</a></p>";
+    let expected_output = b"<a href=\"https://swizzard.pizza\" target=\"_blank\">my website</a>";
     transcribe(input, &mut output)?;
     let o: &[u8] = output.as_ref();
     assert_eq!(&expected_output, &o, "link label");
@@ -97,8 +96,6 @@ fn test_foot_note_link() -> SamupResult {
     let input = b"note[^1]";
     let expected_output = b"<p>note<a id=\"link-1\" target=\"#ref-1\"><sup>1</sup></a></p>";
     transcribe(input, &mut output)?;
-    // let s = unsafe { str::from_utf8_unchecked(&output) };
-    // println!("test_foot_note_link actually {s}");
     let o: &[u8] = output.as_ref();
     assert_eq!(&expected_output, &o, "foot note link");
     output.clear();
@@ -112,5 +109,15 @@ fn test_foot_note_link() -> SamupResult {
     Ok(())
 }
 
-// #[test]
-// fn test_foot_note_ref() -> SamupResult {}
+#[test]
+fn test_foot_note_ref() -> SamupResult {
+    let mut output = Vec::new();
+    let input = b"[^1]: foo";
+    let expected_output: &[u8] = "<p class=\"footnote\" id=\"ref-1\"><span class=\"footnote\">1:</span> foo<a href=\"#link-1\">\u{1f519}</a></p>".as_ref();
+    transcribe(input, &mut output)?;
+    let s = unsafe { str::from_utf8_unchecked(&output) };
+    println!("test_foot_note_ref actually {s}");
+    let o: &[u8] = output.as_ref();
+    assert_eq!(&expected_output, &o, "foot note ref");
+    Ok(())
+}

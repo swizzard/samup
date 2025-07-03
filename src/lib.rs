@@ -203,7 +203,7 @@ impl Tag {
                 let note_no = note_no.ix();
                 write!(
                     output,
-                    "<p class=\"footnote\" id=\"ref-{note_no}\"><span class=\"footnote\">{note_no}:</span> "
+                    "<p class=\"footnote\" id=\"ref-{note_no}\"><span class=\"footnote\">{note_no}:</span>"
                 )
             }
         }
@@ -298,9 +298,6 @@ impl Tag {
     }
     fn new_fn_link(c: u8) -> Self {
         Tag::FootNoteLink(FootNoteIx::new(c))
-    }
-    fn new_fn_ref(c: u8) -> Self {
-        Tag::FootNoteRef(FootNoteIx::new(c))
     }
     fn push_fn_digit(&mut self, c: u8) {
         if let Tag::FootNoteLink(n) | Tag::FootNoteRef(n) = self {
