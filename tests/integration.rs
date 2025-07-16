@@ -4,7 +4,7 @@ use samup::{SamupResult, transcribe};
 // println!("test_ actually {s}");
 
 #[test]
-fn test_whitespace_content() -> SamupResult {
+fn test_content() -> SamupResult {
     let mut output = Vec::new();
     let input = b"a \nb";
     let expected_out = b"<p>a \nb</p>";
@@ -72,8 +72,6 @@ fn test_link_no_label() -> SamupResult {
     let expected_output =
         b"<p><a href=\"https://swizzard.pizza\" target=\"_blank\">https://swizzard.pizza</a></p>";
     transcribe(input, &mut output)?;
-    let s = unsafe { str::from_utf8_unchecked(&output) };
-    println!("test_link_no_label actually {s}");
     let o: &[u8] = output.as_ref();
     assert_eq!(&expected_output, &o, "link no label");
     Ok(())
@@ -102,8 +100,6 @@ fn test_foot_note_link() -> SamupResult {
     let input = b"note[^12]";
     let expected_output = b"<p>note<a id=\"link-12\" target=\"#ref-12\"><sup>12</sup></a></p>";
     transcribe(input, &mut output)?;
-    let s = unsafe { str::from_utf8_unchecked(&output) };
-    println!("test_foot_note_link actually {s}");
     let o: &[u8] = output.as_ref();
     assert_eq!(&expected_output, &o, "foot note link");
     Ok(())
@@ -115,8 +111,6 @@ fn test_foot_note_ref() -> SamupResult {
     let input = b"[^1]: foo";
     let expected_output: &[u8] = "<p class=\"footnote\" id=\"ref-1\"><span class=\"footnote\">1:</span> foo<a href=\"#link-1\">\u{1f519}</a></p>".as_ref();
     transcribe(input, &mut output)?;
-    let s = unsafe { str::from_utf8_unchecked(&output) };
-    println!("test_foot_note_ref actually {s}");
     let o: &[u8] = output.as_ref();
     assert_eq!(&expected_output, &o, "foot note ref");
     Ok(())

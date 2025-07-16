@@ -1,29 +1,59 @@
-# grammar
+# samup grammar
 
 ```
-... = [^\n]+
-LINK = [^\s]+
-LINK_TITLE = [^\n]+
-FN = \d+
+`|` = alternation
+`^` = complement/negation
+`[...]` = optional/contextual
+`(...)` = group
+`(?<name>...)` = named group
+`(?<name>)` = the contents of the named group
 
-(^\n | \n\n)... => <p>
+BOF = <beginning of input>
+EOF = <end of input>
+NEWLINE = "\n" | "\r"
+WHITESPACE = " " | "\t"
+DIGIT = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"
+UNDERSCORE = "_"
+ASTERISK = "*"
+OCTOTHORPE = "#"
+CARET = "^"
+SQ_BRACKET_L = "["
+SQ_BRACKET_R = "]"
+PAREN_L = "("
+PAREN_R = ")"
+COLON = ":"
+CONTENT = ? any ASCII character not covered above ?
+INLINE = WHITESPACE | DIGIT | UNDERSCORE | ASTERISK | CARET | SQ_BRACKET_R | PAREN_L | PAREN_R | CONTENT
+LINK_CONTENT = DIGIT | UNDERSCORE | ASTERISK | OCTOTHORPE | SQ_BRACKET_L | PAREN_L | PAREN_R
+LINK_END = WHITESPACE | NEWLINE | SQ_BRACKET_R
 
-...\n\n => </p>
+BOF INLINE = <p>INLINE
+BOF ^INLINE = ^INLINE
 
-_..._ => <i>...</i>
+NEWLINE INLINE = [</p>\n]<p>INLINE
+NEWLINE NEWLINE ^INLINE = [</p>\n]^INLINE
+NEWLINE NEWLINE = </p>
 
-*...* => <strong>...</strong>
+(NEWLINE | WHITESPACE) UNDERSCORE+ ^UNDERSCORE = <i>^UNDERSCORE
+^UNDERSCORE UNDERSCORE = ^UNDERSCORE</i>
 
-#...\n+ => <h1>...\n
+(NEWLINE | WHITESPACE) ASTERISK+ ^ASTERISK = <strong>^ASTERISK
+^ASTERISK ASTERISK = ^ASTERISK</strong>
 
-##...\n+ => <h2>...\n
+SQ_BRACKET_L (?<LINK>LINK_CONTENT) SQ_BRACKET_R ^PAREN_L = <a href="(?<LINK>)" target="_blank">(?<LINK>)</a>
+SQ_BRACKET_L (?<LINK>LINK_CONTENT) SQ_BRACKET_R PAREN_L (?<LABEL>^PAREN_R+) PAREN_R =
+  <a href="(?<LINK>)" target="_blank">(?<LABEL>)</a>
 
-[LINK] => <a href="LINK" target="_blank">LINK</a>
+SQ_BRACKET_L CARET (?<FN>DIGIT+) SQ_BRACKET_R = <a id=\"link-(?<FN>)\" target=\"#ref-(?<FN>)\"><sup>(?<FN>)</sup></a>
+NEWLINE SQ_BRACKET_L CARET (?<FN>DIGIT+) SQ_BRACKET_R COLON ^NEWLINE =
+  <p class=\"footnote\" id=\"ref-(?<FN>)\"><span class=\"footnote\">(?<FN>):</span>^NEWLINE<a href=\"#link-(?<FN>)\">\u{1f519}</a></p>
 
-[LINK](LINK_TITLE) => <a href="LINK" target="_blank">LINK_TITLE</a>
-
-[^FN] => <a id="link-FN" target="#ref-FN"><sup>FN</sup></a>
-
-\n+[^FN]: ...(\n | EOF) => <p class="footnote" id="ref-{FN}"><span class="footnote">{FN}:</span> ...</p>
+OCTOTHORPE INLINE = <h1>INLINE
+OCTOTHORPE OCTOTHORPE INLINE = <h2>INLINE
+OCTOTHORPE OCTOTHORPE OCTOTHORPE INLINE = <h3>INLINE
+OCTOTHORPE OCTOTHORPE OCTOTHORPE OCTOTHORPE INLINE = <h4>INLINE
+OCTOTHORPE OCTOTHORPE OCTOTHORPE OCTOTHORPE OCTOTHORPE INLINE = <h5>INLINE
+OCTOTHORPE OCTOTHORPE OCTOTHORPE OCTOTHORPE OCTOTHORPE OCTOTHORPE INLINE = <h6>INLINE
+OCTOTHORPE OCTOTHORPE OCTOTHORPE OCTOTHORPE OCTOTHORPE OCTOTHORPE OCTOTHORPE INLINE = <h6>#INLINE
 
 ```
